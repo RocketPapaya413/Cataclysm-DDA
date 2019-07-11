@@ -1715,6 +1715,17 @@ void game::set_critter_died()
     critter_died = true;
 }
 
+static int maptile_field_intensity( maptile &mt, field_type_id fld )
+{
+    auto field_ptr = mt.find_field( fld );
+
+    return ( field_ptr == nullptr ? 0 : field_ptr->get_field_intensity() );
+}
+static bool maptile_trap_eq( maptile &mt, const trap_id &id )
+{
+    return mt.get_trap() == id;
+}
+
 int get_heat_radiation( const tripoint &location, bool direct )
 {
     // Direct heat from fire sources
@@ -1725,10 +1736,12 @@ int get_heat_radiation( const tripoint &location, bool direct )
     for( const tripoint &dest : g->m.points_in_radius( location, 6 ) ) {
         int heat_intensity = 0;
 
-        int ffire = g->m.get_field_intensity( dest, fd_fire );
+        maptile mt = g->m.maptile_at( dest );
+
+        int ffire = maptile_field_intensity( mt, fd_fire );
         if( ffire > 0 ) {
             heat_intensity = ffire;
-        } else if( g->m.tr_at( dest ).loadid == tr_lava ) {
+        } else if( maptile_trap_eq( mt, tr_lava ) ) {
             heat_intensity = 3;
         }
         if( heat_intensity == 0 ) {
@@ -1760,29 +1773,29 @@ int get_convection_temperature( const tripoint &location )
 {
     // Heat from hot air (fields)
     int temp_mod = 0;
-    const trap &trap_at_pos = g->m.tr_at( location );
+    maptile mt = g->m.maptile_at( location );
     // directly on fire/lava tiles
-    int tile_intensity = g->m.get_field_intensity( location, fd_fire );
-    if( tile_intensity > 0 || trap_at_pos.loadid == tr_lava ) {
+    int tile_intensity = maptile_field_intensity( mt, fd_fire );
+    if( tile_intensity > 0 || maptile_trap_eq( mt, tr_lava ) ) {
         temp_mod += 300;
     }
     // hot air of a fire/lava
-    auto tile_intensity_mod = []( const tripoint & loc, field_type_id fld, int case_1, int case_2,
+    auto tile_intensity_mod = []( maptile & mt, field_type_id fld, int case_1, int case_2,
     int case_3 ) {
-        int field_intensity = g->m.get_field_intensity( loc, fld );
+        int field_intensity = maptile_field_intensity( mt, fld );
         int cases[3] = { case_1, case_2, case_3 };
         return ( field_intensity > 0 && field_intensity < 4 ) ? cases[ field_intensity - 1 ] : 0;
     };
 
     // TODO: Jsonize
-    temp_mod += tile_intensity_mod( location, fd_hot_air1,  2,   6,  10 );
-    temp_mod += tile_intensity_mod( location, fd_hot_air2,  6,  16,  20 );
-    temp_mod += tile_intensity_mod( location, fd_hot_air3, 16,  40,  70 );
-    temp_mod += tile_intensity_mod( location, fd_hot_air4, 70, 100, 160 );
-    temp_mod -= tile_intensity_mod( location, fd_cold_air1,  2,   6,  10 );
-    temp_mod -= tile_intensity_mod( location, fd_cold_air2,  6,  16,  20 );
-    temp_mod -= tile_intensity_mod( location, fd_cold_air3, 16,  40,  70 );
-    temp_mod -= tile_intensity_mod( location, fd_cold_air4, 70, 100, 160 );
+    temp_mod += tile_intensity_mod( mt, fd_hot_air1,  2,   6,  10 );
+    temp_mod += tile_intensity_mod( mt, fd_hot_air2,  6,  16,  20 );
+    temp_mod += tile_intensity_mod( mt, fd_hot_air3, 16,  40,  70 );
+    temp_mod += tile_intensity_mod( mt, fd_hot_air4, 70, 100, 160 );
+    temp_mod -= tile_intensity_mod( mt, fd_cold_air1,  2,   6,  10 );
+    temp_mod -= tile_intensity_mod( mt, fd_cold_air2,  6,  16,  20 );
+    temp_mod -= tile_intensity_mod( mt, fd_cold_air3, 16,  40,  70 );
+    temp_mod -= tile_intensity_mod( mt, fd_cold_air4, 70, 100, 160 );
 
     return temp_mod;
 }
@@ -1821,6 +1834,16 @@ int game::kill_count( const species_id &spec )
 void game::increase_kill_count( const mtype_id &id )
 {
     kills[id]++;
+}
+
+int game::kill_xp() const
+{
+    int ret = 0;
+    for( const std::pair<mtype_id, int> &pair : kills ) {
+        ret += ( pair.first->difficulty + pair.first->difficulty_base ) * pair.second;
+    }
+    ret += npc_kills.size() * 10;
+    return ret;
 }
 
 void game::record_npc_kill( const npc &p )
@@ -2986,6 +3009,11 @@ void game::disp_kills()
         buffer << _( "You haven't killed any monsters yet!" );
     } else {
         buffer << string_format( _( "KILL COUNT: %d" ), totalkills );
+        if( get_option<bool>( "STATS_THROUGH_KILLS" ) ) {
+            buffer << "    ";
+            buffer << string_format( _( "Experience: %d (%d points available)" ), kill_xp(),
+                                     u.free_upgrade_points() );
+        }
     }
     display_table( w, buffer.str(), 3, data );
 
@@ -3740,7 +3768,7 @@ std::unordered_set<tripoint> game::get_fishable_locations( int distance, const t
             }
 
             // This point is out of bounds, so bail.
-            if( !generic_inbounds( current_point, fishing_boundaries ) ) {
+            if( !fishing_boundaries.contains_inclusive( current_point ) ) {
                 continue;
             }
 
@@ -8995,9 +9023,9 @@ bool game::walk_move( const tripoint &dest_loc )
             } else if( u.has_bionic( bionic_id( "bio_ankles" ) ) ) {
                 volume = 12;
             }
-            if( u.get_movement_mode() == "run" ) {
+            if( u.movement_mode_is( PMM_RUN ) ) {
                 volume *= 1.5;
-            } else if( u.get_movement_mode() == "crouch" ) {
+            } else if( u.movement_mode_is( PMM_CROUCH ) ) {
                 volume /= 2;
             }
             sounds::sound( dest_loc, volume, sounds::sound_t::movement, _( "footsteps" ), true,
@@ -9680,14 +9708,14 @@ void game::on_move_effects()
         }
     }
     if( u.has_active_bionic( bionic_id( "bio_jointservo" ) ) ) {
-        if( u.get_movement_mode() == "run" ) {
+        if( u.movement_mode_is( PMM_RUN ) ) {
             u.charge_power( -20 );
         } else {
             u.charge_power( -10 );
         }
     }
 
-    if( u.get_movement_mode() == "run" ) {
+    if( u.movement_mode_is( PMM_RUN ) ) {
         if( u.stamina <= 0 ) {
             u.toggle_run_mode();
         }
@@ -11671,11 +11699,12 @@ bool game::non_dead_range<Creature>::iterator::valid()
     if( !current ) {
         return false;
     }
-    if( const monster *const ptr = dynamic_cast<monster *>( current.get() ) ) {
-        return !ptr->is_dead();
+    const Creature *const critter = current.get();
+    if( critter->is_monster() ) {
+        return !static_cast<const monster *>( critter )->is_dead();
     }
-    if( const npc *const ptr = dynamic_cast<npc *>( current.get() ) ) {
-        return !ptr->is_dead();
+    if( critter->is_npc() ) {
+        return !static_cast<const npc *>( critter )->is_dead();
     }
     return true; // must be g->u
 }

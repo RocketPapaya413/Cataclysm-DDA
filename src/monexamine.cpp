@@ -96,7 +96,8 @@ bool monexamine::pet_menu( monster &z )
     } else {
         amenu.addentry( mon_armor_add, true, 'a', _( "Equip %s with armor" ), pet_name );
     }
-    if( z.has_flag( MF_BIRDFOOD ) || z.has_flag( MF_CATFOOD ) || z.has_flag( MF_DOGFOOD ) ) {
+    if( z.has_flag( MF_BIRDFOOD ) || z.has_flag( MF_CATFOOD ) || z.has_flag( MF_DOGFOOD ) ||
+        z.has_flag( MF_CANPLAY ) ) {
         amenu.addentry( play_with_pet, true, 'y', _( "Play with %s" ), pet_name );
     }
     if( z.has_effect( effect_tied ) ) {
@@ -233,7 +234,7 @@ void monexamine::mount_pet( monster &z )
     if( z.has_effect( effect_tied ) ) {
         z.remove_effect( effect_tied );
         if( z.tied_item ) {
-            g->u.i_add( *z.tied_item, 0 );
+            g->u.i_add( *z.tied_item );
             z.tied_item = cata::nullopt;
         }
     }
@@ -509,7 +510,7 @@ void monexamine::tie_or_untie( monster &z )
     if( z.has_effect( effect_tied ) ) {
         z.remove_effect( effect_tied );
         if( z.tied_item ) {
-            g->u.i_add( *z.tied_item, 0 );
+            g->u.i_add( *z.tied_item );
             z.tied_item = cata::nullopt;
         }
     } else {
